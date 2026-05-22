@@ -15,10 +15,16 @@ const REPORTS_DIR = path.join(CLAWSEC_DIR, 'reports');
 const INTEL_DIR = process.env.CLAWSEC_INTEL_DIR || '/srv/clawsec/intel';
 
 // POST /api/v1/scan - Submit skill for verification
-// Validate id param: alphanumeric + hyphens only
+// Validate id param: alphanumeric + hyphens only, max 128 chars
 function sanitizeId(id) {
-    if (!/^[a-zA-Z0-9-]+$/.test(id)) return null;
+    if (!id || !/^[a-zA-Z0-9_-]+$/.test(id) || id.length > 128) return null;
     return id;
+}
+
+// Validate slug for clawhub install: same rules as id
+function sanitizeSlug(slug) {
+    if (!slug || !/^[a-zA-Z0-9_-]+$/.test(slug) || slug.length > 128) return null;
+    return slug;
 }
 
 router.post('/scan', (req, res) => {
@@ -38,10 +44,15 @@ router.post('/scan', (req, res) => {
         if (reqPath && fs.existsSync(reqPath)) {
             targetDir = reqPath;
         } else if (slug) {
+            // P1-4: Validate slug before passing to clawhub install
+            const safeSlug = sanitizeSlug(slug);
+            if (!safeSlug) {
+                return res.status(400).json({ error: 'Invalid slug: must be alphanumeric with hyphens/underscores, max 128 chars' });
+            }
             // Try to install from ClawHub
             const tmpDir = `/tmp/clawsec-scan-${uuidv4().slice(0, 8)}`;
             try {
-                execFileSync('clawhub', ['install', slug, '--dir', tmpDir], {
+                execFileSync('clawhub', ['install', safeSlug, '--dir', tmpDir], {
                     timeout: 60000, encoding: 'utf8'
                 });
                 // Find the installed skill

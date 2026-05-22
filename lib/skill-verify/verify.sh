@@ -28,6 +28,10 @@ usage() {
     echo "  --strict     Fail if ANY intel source is missing (default: warn)"
     echo "  --help       Show this help"
     echo ""
+    echo "Staleness thresholds:"
+    echo "  30+ days stale  → warn (results may be outdated)"
+    echo "  90+ days stale  → fail (results unreliable, resync required)"
+    echo ""
     echo "Checks: dep-scan, static-analysis, secret-scan, yara-scan,"
     echo "        ioc-match, behavioral, prompt-inject"
     exit 0
@@ -99,6 +103,39 @@ else
     if [[ ! -f "${INTEL_DIR}/feodo/c2_ips.csv" ]]; then
         intel_errors+=("Feodo cache missing")
         ((strict_mode)) && strict_fail=1
+    fi
+
+    # P1-3: Staleness check — warn if 30+ days, fail if 90+ days
+    if [[ -f "$MANIFEST_JSON" ]]; then
+        stale_warn=0
+        stale_fail=0
+        while IFS= read -r line; do
+            src_name=$(echo "$line" | jq -r '.name // empty')
+            src_date=$(echo "$line" | jq -r '.last_sync // empty')
+            [[ -z "$src_name" || -z "$src_date" || "$src_date" == "never" ]] && continue
+            # Calculate age in days
+            sync_epoch=$(date -d "$src_date" +%s 2>/dev/null || echo 0)
+            now_epoch=$(date +%s)
+            if [[ "$sync_epoch" -gt 0 ]]; then
+                age_days=$(( (now_epoch - sync_epoch) / 86400 ))
+                if [[ $age_days -ge 90 ]]; then
+                    stale_fail=1
+                    intel_errors+=("${src_name} is ${age_days} days old (>= 90 days — scan results unreliable)")
+                elif [[ $age_days -ge 30 ]]; then
+                    stale_warn=1
+                    if [[ $json_only -eq 0 ]]; then
+                        echo -e "  ${WARNMARK} ${src_name} is ${age_days} days old (>= 30 days)" >&2
+                    fi
+                fi
+            fi
+        done < <(jq -c '.sources[]' "$MANIFEST_JSON" 2>/dev/null)
+
+        if [[ $stale_fail -eq 1 ]]; then
+            strict_fail=1
+            for err in "${intel_errors[@]}"; do
+                [[ "$err" == *"90 days"* ]] && echo -e "  ${RED}${BOLD}STALE:${RESET} $err" >&2
+            done
+        fi
     fi
 fi
 
@@ -245,7 +282,7 @@ if [[ -z "$report_json" ]]; then
         --arg verdict "$verdict" \
         --arg path "$skill_path" \
         --argjson duration "$elapsed_ms" \
-        '{version:"2.0.0",verdict:$verdict,skill_path:$path,checks:.,scan_duration_ms:$duration}')
+        '{schema_version:"2.0.0",version:"2.0.0",verdict:$verdict,skill_path:$path,checks:.,scan_duration_ms:$duration}')
 fi
 
 verdict=$(echo "$report_json" | jq -r '.verdict')

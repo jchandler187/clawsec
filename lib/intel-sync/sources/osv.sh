@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # OSV sync - npm and PyPI ecosystems
+# Downloads OSV advisories and builds a consolidated index for fast lookups
 set -euo pipefail
 
 source "$(dirname "$0")/../../common/config.sh"
@@ -27,7 +28,9 @@ for eco in "${ECOSYSTEMS[@]}"; do
     if curl -fsSL --max-time 300 --retry 3 --retry-delay 5 "$zip_url" -o "$zip_tmp"; then
         extract_tmp=$(mktemp -d "/tmp/osv-${eco}-extract.XXXXXX")
         if unzip -q -o "$zip_tmp" -d "$extract_tmp" 2>/dev/null; then
+            # Clean old JSON files and broken symlinks before replacing
             find "$eco_dir" -maxdepth 1 -name '*.json' -delete 2>/dev/null || true
+            find "$eco_dir" -maxdepth 1 -type l ! -exec test -e {} \; -delete 2>/dev/null || true
             find "$extract_tmp" -maxdepth 1 -name '*.json' -exec mv -t "$eco_dir" {} +
             count=$(find "$eco_dir" -maxdepth 1 -name '*.json' | wc -l)
             total=$((total + count))
@@ -44,11 +47,51 @@ for eco in "${ECOSYSTEMS[@]}"; do
     rm -f "$zip_tmp"
 done
 
+# Build consolidated index: package_name -> list of advisory filenames
+log_info "Building OSV package index..."
+for eco in "${ECOSYSTEMS[@]}"; do
+    eco_dir="${OSV_DIR}/${eco}"
+    index_file="${eco_dir}/index.json"
+
+    if [[ -d "$eco_dir" ]]; then
+        # Build index using Python for speed
+        python3 -c "
+import json, os, sys
+eco_dir = sys.argv[1]
+index = {}
+for fname in os.listdir(eco_dir):
+    if not fname.endswith('.json') or fname == 'index.json':
+        continue
+    fpath = os.path.join(eco_dir, fname)
+    try:
+        with open(fpath) as f:
+            adv = json.load(f)
+        for affected in adv.get('affected', []):
+            pkg = affected.get('package', {})
+            name = pkg.get('name', '')
+            if name:
+                key = name.lower()
+                if key not in index:
+                    index[key] = []
+                index[key].append(fname)
+    except (json.JSONDecodeError, KeyError, OSError):
+        continue
+# Write index atomically
+tmp = index_file + '.new'
+with open(tmp, 'w') as f:
+    json.dump(index, f)
+os.rename(tmp, index_file)
+" "$eco_dir"
+        index_count=$(python3 -c "import json; print(len(json.load(open('$index_file'))))" 2>/dev/null || echo "?")
+        log_info "OSV $eco index: $index_count packages"
+    fi
+done
+
 status="success"
 [[ $any_fail -eq 1 ]] && status="partial"
 python3 "$MANIFEST_PY" update osv "$total" "$status"
 if [[ $any_fail -eq 0 ]]; then
-    echo -e "${CHECKMARK} OSV: ${total} advisories (npm + PyPI)"
+    echo -e "${CHECKMARK} OSV: ${total} advisories (npm + PyPI, indexed)"
 else
     echo -e "${WARNMARK} OSV: partial sync — ${total} advisories"
 fi

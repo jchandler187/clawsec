@@ -44,19 +44,33 @@ def load_epss():
     return epss
 
 def load_osv_ecosystem(ecosystem):
-    """Load all OSV advisories for an ecosystem."""
-    advisories = []
+    """Load OSV advisories for an ecosystem using the consolidated index.
+
+    Falls back to full directory scan if index.json is missing.
+    """
     eco_dir = os.path.join(INTEL_DIR, "osv", ecosystem)
     if not os.path.isdir(eco_dir):
-        return advisories
+        return []
+
+    # Try loading via index for fast lookup
+    index_path = os.path.join(eco_dir, "index.json")
+    if os.path.exists(index_path):
+        try:
+            with open(index_path) as f:
+                index = json.load(f)
+            return _load_osv_via_index(eco_dir, index)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Fallback: iterate all files (slow, ~10s for 219K advisories)
+    advisories = []
     for fname in os.listdir(eco_dir):
-        if not fname.endswith(".json"):
+        if not fname.endswith(".json") or fname == "index.json":
             continue
         fpath = os.path.join(eco_dir, fname)
         try:
             with open(fpath) as f:
                 adv = json.load(f)
-            # Get affected package names
             for affected in adv.get("affected", []):
                 pkg = affected.get("package", {})
                 name = pkg.get("name", "")
@@ -76,6 +90,49 @@ def load_osv_ecosystem(ecosystem):
                     })
         except (json.JSONDecodeError, KeyError):
             continue
+    return advisories
+
+
+def _load_osv_via_index(eco_dir, index):
+    """Load OSV advisories using the pre-built package index.
+
+    The index maps lowercase package names to lists of advisory filenames.
+    We only load advisory files referenced by the index entries we need.
+    """
+    advisories = []
+    advisory_cache = {}  # cache parsed advisories by filename
+
+    for pkg_name_lower, fnames in index.items():
+        for fname in fnames:
+            if fname in advisory_cache:
+                adv = advisory_cache[fname]
+            else:
+                fpath = os.path.join(eco_dir, fname)
+                try:
+                    with open(fpath) as f:
+                        adv = json.load(f)
+                    advisory_cache[fname] = adv
+                except (json.JSONDecodeError, KeyError, OSError):
+                    continue
+
+            for affected in adv.get("affected", []):
+                pkg = affected.get("package", {})
+                name = pkg.get("name", "")
+                eco = pkg.get("ecosystem", "")
+                ranges = affected.get("ranges", [])
+                versions = affected.get("versions", [])
+                if name:
+                    advisories.append({
+                        "id": adv.get("id", ""),
+                        "summary": adv.get("summary", ""),
+                        "cve_ids": [a for a in adv.get("aliases", []) if a.startswith("CVE-")],
+                        "package": name,
+                        "ecosystem": eco,
+                        "ranges": ranges,
+                        "versions": versions,
+                        "severity": adv.get("database_specific", {}).get("severity", ""),
+                    })
+
     return advisories
 
 def parse_skill_deps(skill_path):
@@ -159,6 +216,67 @@ def version_in_range(ver_str, ranges_list):
     return False
 
 
+def check_staleness(missing_criticals=None):
+    """Check intel cache staleness from manifest.
+
+    Returns a list of staleness findings:
+    - 30+ days: warn severity
+    - 90+ days: critical severity (scan can't be trusted)
+    """
+    import datetime
+    findings = []
+    manifest_path = os.path.join(INTEL_DIR, "manifest.json")
+
+    if not os.path.exists(manifest_path):
+        return findings
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return findings
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    for src in manifest.get("sources", []):
+        last_sync = src.get("last_sync", "")
+        if not last_sync or last_sync == "never":
+            findings.append({
+                "category": "intel_stale",
+                "source": src["name"],
+                "severity": "critical",
+                "description": f"Intel source {src['name']} has never been synced. Run: clawsec sync {src['name']}"
+            })
+            continue
+
+        try:
+            # Parse ISO timestamp
+            ts = last_sync.replace("Z", "+00:00")
+            sync_dt = datetime.datetime.fromisoformat(ts)
+            if sync_dt.tzinfo is None:
+                sync_dt = sync_dt.replace(tzinfo=datetime.timezone.utc)
+            age_days = (now - sync_dt).days
+        except (ValueError, AttributeError):
+            continue
+
+        if age_days >= 90:
+            findings.append({
+                "category": "intel_stale",
+                "source": src["name"],
+                "severity": "critical",
+                "description": f"Intel source {src['name']} is {age_days} days old (>= 90 days). Scan results cannot be trusted. Run: clawsec sync {src['name']}"
+            })
+        elif age_days >= 30:
+            findings.append({
+                "category": "intel_stale",
+                "source": src["name"],
+                "severity": "high",
+                "description": f"Intel source {src['name']} is {age_days} days old (>= 30 days). Results may be outdated. Run: clawsec sync {src['name']}"
+            })
+
+    return findings
+
+
 def check_intel_cache():
     """Verify intel cache directory and required sources exist."""
     missing = []
@@ -194,6 +312,15 @@ def check_dependencies(skill_path):
         results["errors"].append("intel cache directory missing")
         return results
 
+    # P1-3: Check staleness of intel sources
+    staleness = check_staleness()
+    for s in staleness:
+        results["findings"].append(s)
+    # If any source is 90+ days stale, override verdict to fail
+    if any(s["severity"] == "critical" for s in staleness):
+        results["status"] = "fail"
+        results["errors"].append("Intel sources critically stale (>= 90 days). Scan results unreliable.")
+
     deps = parse_skill_deps(skill_path)
     if not deps:
         results["status"] = "pass"
@@ -207,8 +334,58 @@ def check_dependencies(skill_path):
     # This prevents cross-matching (e.g., npm "requests" matching PyPI advisory)
     ecosystems_found = set(d["ecosystem"] for d in deps if d["ecosystem"] in ("npm", "PyPI"))
     osv_advisories = {}
+
+    # For indexed lookups, use the index to load only relevant advisories
     for eco in ecosystems_found:
-        osv_advisories[eco] = load_osv_ecosystem(eco)
+        eco_dir = os.path.join(INTEL_DIR, "osv", eco)
+        index_path = os.path.join(eco_dir, "index.json")
+
+        if os.path.exists(index_path):
+            # Fast path: load only advisories for our dependency names
+            try:
+                with open(index_path) as f:
+                    index = json.load(f)
+
+                # Collect all unique filenames for our deps
+                needed_fnames = set()
+                for dep in deps:
+                    key = dep["name"].lower()
+                    if key in index:
+                        needed_fnames.update(index[key])
+
+                # Load only the needed advisory files
+                eco_advisories = []
+                for fname in needed_fnames:
+                    fpath = os.path.join(eco_dir, fname)
+                    try:
+                        with open(fpath) as f:
+                            adv = json.load(f)
+                        for affected in adv.get("affected", []):
+                            pkg = affected.get("package", {})
+                            name = pkg.get("name", "")
+                            pkg_eco = pkg.get("ecosystem", "")
+                            ranges = affected.get("ranges", [])
+                            versions = affected.get("versions", [])
+                            if name:
+                                eco_advisories.append({
+                                    "id": adv.get("id", ""),
+                                    "summary": adv.get("summary", ""),
+                                    "cve_ids": [a for a in adv.get("aliases", []) if a.startswith("CVE-")],
+                                    "package": name,
+                                    "ecosystem": pkg_eco,
+                                    "ranges": ranges,
+                                    "versions": versions,
+                                    "severity": adv.get("database_specific", {}).get("severity", ""),
+                                })
+                    except (json.JSONDecodeError, KeyError, OSError):
+                        continue
+
+                osv_advisories[eco] = eco_advisories
+            except (json.JSONDecodeError, OSError):
+                osv_advisories[eco] = load_osv_ecosystem(eco)
+        else:
+            # No index, fall back to full scan
+            osv_advisories[eco] = load_osv_ecosystem(eco)
 
     for dep in deps:
         name = dep["name"]
@@ -216,7 +393,7 @@ def check_dependencies(skill_path):
 
         # Only check OSV advisories from the same ecosystem
         if ecosystem in osv_advisories:
-            for adv in osv_advisories[eco]:
+            for adv in osv_advisories[ecosystem]:
                 if unicodedata.normalize('NFKC', adv["package"].lower()) != unicodedata.normalize('NFKC', name.lower()):
                     continue
                 ver = dep.get("version", "").lstrip("^~>=<!")

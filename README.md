@@ -65,6 +65,94 @@ All data cached under `$CLAWSEC_INTEL_DIR` (default: `/srv/clawsec/intel/`) with
 6. **Behavioral Heuristics** — Flags shell injection, system writes, fetch-exec, large base64 payloads, capability overreach
 7. **Prompt Injection** — Detects instruction overrides, role manipulation, safety bypasses in SKILL.md
 
+## What ClawSec DOES Check
+
+These are the categories covered by the 7 security checks:
+
+- **Known vulnerabilities in declared dependencies** (OSV + CISA KEV + EPSS)
+- **Static code patterns** — shell injection, eval, exec, path traversal, system writes (Semgrep + behavioral heuristics)
+- **Leaked secrets and credentials** — API keys, tokens, passwords (Gitleaks)
+- **Known malware signatures** — YARA rules matching packers, ransomware, suspicious binaries
+- **Threat intel IOC matches** — URLs, IPs, domains, and hashes from URLhaus, ThreatFox, Feodo, MalwareBazaar
+- **Prompt injection attempts** — instruction overrides, role manipulation, jailbreak patterns in SKILL.md
+- **Large encoded payloads** — suspicious base64 blobs above 2KB that decode to binary content
+
+## What ClawSec Does NOT Check
+
+ClawSec is a static analysis tool. It examines skill code and configuration files without executing them. The following categories are **out of scope** and represent known limitations:
+
+- **String concatenation obfuscation** — URLs split across concatenation (`"http://evil" + ".com/payload"`) are not detected. Static regex extraction only matches complete URLs. A future deobfuscation pass may address this.
+- **Lazy-loaded payloads** — Skills that fetch and execute remote code at runtime from a clean URL (e.g., `fetch(url).then(r => eval(r.text()))`) are partially caught (the `eval` is flagged) but the malicious URL itself is not flagged if it isn't in threat intel databases.
+- **Conditional/time-bomb behavior** — Code that only misbehaves under specific environment variables, dates, or runtime conditions is not reliably detected. This requires dynamic analysis (sandbox execution), which is outside the current scope.
+- **Dependency confusion/typo squatting** — Packages not in OSV (e.g., `expresss`, `lodassh`) return "no known vulnerabilities" even if suspicious. Typo detection is not implemented.
+- **Runtime behavior** — Anything that only manifests when the skill is actually executed: network calls at runtime, data exfiltration through normal API usage, side effects from legitimate-looking code.
+- **Transitive dependencies** — Only direct dependencies declared in `package.json`, `requirements.txt`, or SKILL.md are scanned. Vulnerabilities in sub-dependencies of dependencies are not tracked.
+- **Novel or zero-day threats** — Threats not yet present in any intel feed (OSV, CISA KEV, URLhaus, etc.) cannot be detected.
+
+## Threat Model
+
+**In scope:** ClawSec analyzes skill source code and configuration files against known threat indicators (vulnerability databases, IOC feeds, YARA rules, static analysis patterns). The assumed attacker can:
+
+- Embed malicious code in skill files
+- Declare dependencies with known CVEs
+- Include URLs, IPs, domains, or hashes from threat intel databases
+- Use obfuscation techniques (base64, unicode homoglyphs)
+- Attempt prompt injection in SKILL.md
+- Hide secrets, tokens, or credentials in code
+
+**Out of scope:**
+
+- Dynamic/runtime analysis — the skill is not executed
+- Novel threats not yet in IOC feeds or vulnerability databases
+- Supply chain attacks on intel sources (no hash verification on downloads)
+- Network-level attacks during skill installation
+- Social engineering or phishing via skill descriptions
+
+## Intel Cache Staleness
+
+ClawSec checks the age of each intel source during scans:
+
+- **30+ days stale** → Warning (results may be outdated)
+- **90+ days stale** → Critical failure (scan results unreliable, resync required)
+
+Run `clawsec sync` to refresh stale intel sources.
+
+## Operational Runbook
+
+### Intel sync failures
+
+If `clawsec sync` reports failures:
+1. Check network connectivity to the failed source URL
+2. Re-run `clawsec sync <source>` for the specific failed source
+3. If repeated failures, check the manifest: `clawsec status --json`
+4. Stale data from previous successful syncs is preserved — scans will still work with reduced coverage
+
+### Cache corruption
+
+If intel data is corrupted:
+1. Remove the corrupted source directory: `rm -rf /srv/clawsec/intel/<source>`
+2. Re-sync: `clawsec sync <source>`
+3. For OSV, also remove the index file: `rm -f /srv/clawsec/intel/osv/*/index.json`
+4. The next sync will rebuild the index automatically
+
+### False positive disputes
+
+If a finding is a false positive:
+1. Check the specific check and finding category
+2. For IOC matches — the URL/IP/hash is in a threat intel database; verify by searching the source directly
+3. For behavioral heuristics — review the pattern match; some legitimate code may trigger heuristics (e.g., `os.system()` in testing)
+4. Reports include the matched pattern and context for manual review
+5. No suppression mechanism exists yet — findings require human judgment
+
+### Adding a new intel source
+
+1. Create a sync script in `lib/intel-sync/sources/<name>.sh`
+2. The script should download data to `/srv/clawsec/intel/<name>/`
+3. Call `manifest.py update <name> <count> <status>` at the end
+4. Add the source to `ALL_SOURCES` in `lib/intel-sync/sync.sh`
+5. Create a check script or add matching logic to an existing check (e.g., `ioc-match.py`)
+6. Add the source to the intel cache validation in `verify.sh`
+
 ## CLI Usage
 
 ```bash

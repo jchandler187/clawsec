@@ -53,9 +53,10 @@ if jq empty "$tmpout" 2>/dev/null; then
             ]
         ')
         
-        # Recount critical/warning after escalation
+        # Recount escalation levels
         crit=$(echo "$results" | jq '[.findings[] | select(.severity == "ERROR")] | length')
         warn=$(echo "$results" | jq '[.findings[] | select(.severity == "WARNING")] | length')
+        info=$(echo "$results" | jq '[.findings[] | select(.severity == "INFO")] | length')
         
         if [[ "$crit" -gt 0 ]]; then status="fail"
         elif [[ "$warn" -gt 0 ]]; then status="warn"
