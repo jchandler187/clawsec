@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ClawSec v2 Dependency Setup
-# Installs all required tools for intel-sync and skill-verify on Ubuntu 24.04
+# ⚡ ClawSec v2 Dependency Setup
+# Installs all required tools for intel-sync and skill-verify
 set -euo pipefail
 
 VERSION="2.0.0"
@@ -25,7 +25,7 @@ banner() {
     echo -e "${BOLD}"
     echo "  ╔═══════════════════════════════════════╗"
     echo "  ║     ClawSec v${VERSION} Setup               ║"
-    echo "  ║     Security Verification for Skills  ║"
+    echo "  ║     ⚡ Security Verification for Skills ║"
     echo "  ╚═══════════════════════════════════════╝"
     echo -e "${RESET}"
 }
@@ -85,6 +85,7 @@ install_gitleaks() {
     local tmpdir
     tmpdir=$(mktemp -d)
     curl -fsSL "$url" | tar -xz -C "$tmpdir"
+    mkdir -p "$HOME/.local/bin"
     mv "$tmpdir/gitleaks" "$HOME/.local/bin/gitleaks"
     chmod +x "$HOME/.local/bin/gitleaks"
     rm -rf "$tmpdir"
@@ -106,10 +107,11 @@ install_yara_python() {
 }
 
 setup_dirs() {
-    log_info "Setting up directory structure..."
-    sudo mkdir -p "${INTEL_DIR}"/{cisa-kev,osv,epss,malwarebazaar,urlhaus,threatfox,feodo,yara-rules,semgrep-rules}
-    sudo chown -R "${CLAWSEC_USER}:${CLAWSEC_USER}" "${INTEL_DIR}"
-    log_ok "Directory structure ready at ${INTEL_DIR}"
+    log_info "Setting up directory structure at ${CLAWSEC_HOME}..."
+    mkdir -p "${INTEL_DIR}"/{cisa-kev,osv,epss,malwarebazaar,urlhaus,threatfox,feodo,yara-rules,semgrep-rules}
+    mkdir -p "${CLAWSEC_HOME}/reports"
+    mkdir -p "${CLAWSEC_HOME}/venv"
+    log_ok "Directory structure ready at ${CLAWSEC_HOME}"
 }
 
 clone_rule_repos() {
@@ -136,14 +138,14 @@ clone_rule_repos() {
 
 setup_python_env() {
     log_info "Setting up Python virtual environment..."
-    local venv_dir="${CLAWSEC_HOME}/.venv"
-    if [[ ! -d "$venv_dir" ]]; then
+    local venv_dir="${CLAWSEC_HOME}/venv"
+    if [[ ! -d "$venv_dir" ]] || [[ ! -f "$venv_dir/bin/python3" ]]; then
         python3 -m venv "$venv_dir"
     fi
     source "$venv_dir/bin/activate"
     pip install --quiet --upgrade pip
-    if [[ -f "${CLAWSEC_HOME}/requirements.txt" ]]; then
-        pip install --quiet -r "${CLAWSEC_HOME}/requirements.txt"
+    if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
+        pip install --quiet -r "${SCRIPT_DIR}/requirements.txt"
     fi
     deactivate
     log_ok "Python venv ready at $venv_dir"
@@ -191,8 +193,8 @@ main() {
     verify_install
 
     echo ""
-    log_ok "Setup complete. Run: clawsec sync    (to populate intel cache)"
-    log_ok "                clawsec scan <path> (to verify a skill)"
+    log_ok "Setup complete. Run: clawsec scan <path>  (to verify a skill)"
+    log_ok "               clawsec sync          (to populate intel cache)"
 }
 
 main "$@"

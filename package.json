@@ -1,11 +1,23 @@
 {
-  "name": "@lowwattlabs/clawsec-api",
+  "name": "@lowwattlabs/clawsec",
   "version": "2.0.0",
-  "description": "ClawSec - Security Verification API for ClawHub Skills",
-  "main": "api/src/server.js",
+  "description": "ClawSec - Security Verification for ClawHub Skills",
+  "bin": {
+    "clawsec": "./bin/clawsec.js",
+    "clawsec-api": "./bin/clawsec-api.js"
+  },
+  "files": [
+    "bin/",
+    "cli/",
+    "lib/",
+    "api/",
+    "requirements.txt",
+    "setup.sh"
+  ],
   "scripts": {
     "start": "node api/src/server.js",
-    "dev": "node --watch api/src/server.js"
+    "dev": "node --watch api/src/server.js",
+    "postinstall": "node bin/setup-venv.js"
   },
   "dependencies": {
     "express": "^4.21.0",
@@ -14,5 +26,17 @@
     "cors": "^2.8.5"
   },
   "author": "Low Watt Labs",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jchandler187/clawsec.git"
+  },
+  "keywords": [
+    "security",
+    "audit",
+    "clawhub",
+    "skills",
+    "verification",
+    "threat-intel"
+  ]
 }

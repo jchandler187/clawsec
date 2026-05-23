@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# ClawSec Common - Logging
+# ⚡ ClawSec Common - Logging
 # Usage: source this file, then use log_info/warn/err/ok
 
-export CLAWSEC_LOG_FILE="${CLAWSEC_INTEL_DIR:-/srv/clawsec/intel}/../clawsec.log"
+# Source config to get CLAWSEC_INTEL_DIR if not already set
+if [[ -z "${CLAWSEC_HOME:-}" ]]; then
+    SCRIPT_DIR_LOG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${SCRIPT_DIR_LOG}/config.sh"
+fi
+
+export CLAWSEC_LOG_FILE="${CLAWSEC_HOME}/clawsec.log"
 
 _log() {
     local level="$1"; shift

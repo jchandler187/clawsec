@@ -1,20 +1,20 @@
 /**
- * ClawSec v2 - API Routes
+ * ⚡ ClawSec v2 - API Routes
  */
 
 const express = require('express');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 const { generateBadge } = require('./badge');
 
 const router = express.Router();
-const CLAWSEC_DIR = path.join(process.env.CLAWSEC_HOME || (process.env.HOME || '/home/openclaw') + '/clawsec-v2');
-const REPORTS_DIR = path.join(CLAWSEC_DIR, 'reports');
-const INTEL_DIR = process.env.CLAWSEC_INTEL_DIR || '/srv/clawsec/intel';
+const CLAWSEC_DIR = process.env.CLAWSEC_HOME || path.join(os.homedir(), '.clawsec');
+const REPORTS_DIR = process.env.CLAWSEC_REPORTS_DIR || path.join(CLAWSEC_DIR, 'reports');
+const INTEL_DIR = process.env.CLAWSEC_INTEL_DIR || path.join(CLAWSEC_DIR, 'intel');
 
-// POST /api/v1/scan - Submit skill for verification
 // Validate id param: alphanumeric + hyphens only, max 128 chars
 function sanitizeId(id) {
     if (!id || !/^[a-zA-Z0-9_-]+$/.test(id) || id.length > 128) return null;
@@ -50,7 +50,7 @@ router.post('/scan', (req, res) => {
                 return res.status(400).json({ error: 'Invalid slug: must be alphanumeric with hyphens/underscores, max 128 chars' });
             }
             // Try to install from ClawHub
-            const tmpDir = `/tmp/clawsec-scan-${uuidv4().slice(0, 8)}`;
+            const tmpDir = '/tmp/clawsec-scan-' + uuidv4().slice(0, 8);
             try {
                 execFileSync('clawhub', ['install', safeSlug, '--dir', tmpDir], {
                     timeout: 60000, encoding: 'utf8'
@@ -62,11 +62,11 @@ router.post('/scan', (req, res) => {
                     cleanup = true;
                 }
             } catch (e) {
-                return res.status(404).json({ error: `Skill not found: ${slug}` });
+                return res.status(404).json({ error: 'Skill not found: ' + slug });
             }
         } else if (content) {
             // Write content to temp dir
-            const tmpDir = `/tmp/clawsec-scan-${uuidv4().slice(0, 8)}`;
+            const tmpDir = '/tmp/clawsec-scan-' + uuidv4().slice(0, 8);
             fs.mkdirSync(tmpDir, { recursive: true });
 
             if (typeof content === 'string') {
@@ -77,12 +77,12 @@ router.post('/scan', (req, res) => {
                     // P0: Sanitize filename against path traversal
                     const safeName = path.basename(filename).replace(/\.\./g, '');
                     if (safeName !== filename || filename.includes('..')) {
-                        return res.status(400).json({ error: `Invalid filename: ${filename}` });
+                        return res.status(400).json({ error: 'Invalid filename: ' + filename });
                     }
                     // P0: Ensure resolved path stays within tmpDir
                     const filePath = path.resolve(tmpDir, filename);
                     if (!filePath.startsWith(path.resolve(tmpDir) + path.sep)) {
-                        return res.status(400).json({ error: `Path traversal in filename: ${filename}` });
+                        return res.status(400).json({ error: 'Path traversal in filename: ' + filename });
                     }
                     const dirPath = path.dirname(filePath);
                     if (!fs.existsSync(dirPath)) {
@@ -106,7 +106,7 @@ router.post('/scan', (req, res) => {
             const output = execFileSync('bash', [verifyWrapper, targetDir], {
                 timeout: 30000,
                 encoding: 'utf8',
-                env: { ...process.env, PATH: `${process.env.HOME}/.local/bin:${process.env.PATH}` }
+                env: { ...process.env, PATH: process.env.HOME + '/.local/bin:' + process.env.PATH }
             });
             result = JSON.parse(output.trim());
         } catch (e) {
@@ -126,12 +126,12 @@ router.post('/scan', (req, res) => {
 
         // Save report
         const reportId = result.report_id || uuidv4().slice(0, 8);
-        const reportPath = path.join(REPORTS_DIR, `${reportId}.json`);
+        const reportPath = path.join(REPORTS_DIR, reportId + '.json');
         fs.writeFileSync(reportPath, JSON.stringify(result, null, 2));
 
         // Add scan URL to response
-        result.report_url = `/api/v1/report/${reportId}`;
-        result.badge_url = `/api/v1/badge/${reportId}.svg`;
+        result.report_url = '/api/v1/report/' + reportId;
+        result.badge_url = '/api/v1/badge/' + reportId + '.svg';
 
         res.json({ report_id: reportId, ...result });
 
@@ -146,7 +146,7 @@ router.post('/scan', (req, res) => {
 router.get('/report/:id', (req, res) => {
     const id = sanitizeId(req.params.id);
     if (!id) return res.status(403).json({ error: 'invalid id' });
-    const reportPath = path.join(REPORTS_DIR, `${id}.json`);
+    const reportPath = path.join(REPORTS_DIR, id + '.json');
     const resolved = path.resolve(reportPath);
     if (!resolved.startsWith(REPORTS_DIR + path.sep)) return res.status(403).json({ error: 'invalid id' });
     if (!fs.existsSync(resolved)) {
@@ -161,7 +161,7 @@ router.get('/badge/:id.svg', (req, res) => {
     const rawId = req.params.id.replace('.svg', '');
     const id = sanitizeId(rawId);
     if (!id) return res.type('svg').status(403).send(generateBadge('unknown'));
-    const reportPath = path.join(REPORTS_DIR, `${id}.json`);
+    const reportPath = path.join(REPORTS_DIR, id + '.json');
     const resolved = path.resolve(reportPath);
     if (!resolved.startsWith(REPORTS_DIR + path.sep)) return res.type('svg').status(403).send(generateBadge('unknown'));
     if (!fs.existsSync(resolved)) {

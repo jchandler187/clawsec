@@ -12,7 +12,7 @@ source "${SCRIPT_DIR}/../common/colors.sh"
 source "${SCRIPT_DIR}/../common/log.sh"
 
 # Activate Python venv if available
-VENV="${CLAWSEC_HOME}/.venv"
+VENV="${CLAWSEC_HOME}/venv"
 if [[ -d "$VENV" ]]; then
     source "$VENV/bin/activate"
 fi

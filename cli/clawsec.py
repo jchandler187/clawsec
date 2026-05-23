@@ -20,9 +20,13 @@ import time
 from pathlib import Path
 
 VERSION = "2.0.0"
-CLAWSEC_DIR = os.environ.get("CLAWSEC_HOME", os.path.expanduser("~/clawsec-v2"))
-INTEL_DIR = os.environ.get("CLAWSEC_INTEL_DIR", "/srv/clawsec/intel")
-REPORTS_DIR = os.path.join(CLAWSEC_DIR, "reports")
+CLAWSEC_DIR = os.environ.get("CLAWSEC_HOME", os.path.expanduser("~/.clawsec"))
+INTEL_DIR = os.environ.get("CLAWSEC_INTEL_DIR", os.path.join(CLAWSEC_DIR, "intel"))
+REPORTS_DIR = os.environ.get("CLAWSEC_REPORTS_DIR", os.path.join(CLAWSEC_DIR, "reports"))
+
+# Resolve package root — cli/clawsec.py -> parent = package root
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PKG_ROOT = os.path.dirname(SCRIPT_DIR)
 
 # ANSI colors
 R = "\033[0;31m"
@@ -38,7 +42,7 @@ def banner():
     print(f"""{BOLD}
   ╔═════════════════════════════════════════╗
   ║   ClawSec v{VERSION}                      ║
-  ║   Security Verification for ClawHub    ║
+  ║   ⚡ Security Verification for ClawHub  ║
   ╚═════════════════════════════════════════╝{RESET}
 """)
 
@@ -50,15 +54,12 @@ def cmd_scan(args):
     # If it's a slug (no path separator and doesn't exist locally),
     # try to download from ClawHub
     if not os.path.exists(target) and "/" not in target and not target.startswith("."):
-        # Try clawhub CLI to fetch
         try:
-            skill_dir = os.path.join(os.path.dirname(target.replace("/", "-")), target.replace("/", "-"))
             result = subprocess.run(
                 ["clawhub", "install", target, "--dir", "/tmp/clawsec-scan-temp"],
                 capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
-                # Find the installed skill
                 for d in Path("/tmp/clawsec-scan-temp").iterdir():
                     if d.is_dir():
                         target = str(d)
@@ -70,8 +71,12 @@ def cmd_scan(args):
         print(f"{R}Error:{RESET} {target} not found", file=sys.stderr)
         sys.exit(2)
 
-    # Run verify.sh
-    verify_sh = os.path.join(CLAWSEC_DIR, "lib", "skill-verify", "verify.sh")
+    # Run verify.sh — resolve relative to package root
+    verify_sh = os.path.join(PKG_ROOT, "lib", "skill-verify", "verify.sh")
+    # Fallback: check CLAWSEC_HOME (for dev/local setups)
+    if not os.path.exists(verify_sh):
+        verify_sh = os.path.join(CLAWSEC_DIR, "lib", "skill-verify", "verify.sh")
+
     cmd = ["bash", verify_sh]
     if json_mode:
         cmd.append("--json")
@@ -86,7 +91,10 @@ def cmd_scan(args):
 
 def cmd_sync(args):
     """Run intel sync."""
-    sync_sh = os.path.join(CLAWSEC_DIR, "lib", "intel-sync", "sync.sh")
+    sync_sh = os.path.join(PKG_ROOT, "lib", "intel-sync", "sync.sh")
+    if not os.path.exists(sync_sh):
+        sync_sh = os.path.join(CLAWSEC_DIR, "lib", "intel-sync", "sync.sh")
+
     cmd = ["bash", sync_sh]
     if args.json:
         cmd.append("--json")
@@ -96,7 +104,9 @@ def cmd_sync(args):
 
 def cmd_status(args):
     """Show cache status."""
-    manifest_py = os.path.join(CLAWSEC_DIR, "lib", "intel-sync", "manifest.py")
+    manifest_py = os.path.join(PKG_ROOT, "lib", "intel-sync", "manifest.py")
+    if not os.path.exists(manifest_py):
+        manifest_py = os.path.join(CLAWSEC_DIR, "lib", "intel-sync", "manifest.py")
     manifest_path = os.path.join(INTEL_DIR, "manifest.json")
 
     if args.json:
@@ -118,7 +128,6 @@ def cmd_status(args):
         status_icon = G + "✓" + RESET if src["status"] == "success" else Y + "⚠" + RESET if src["status"] == "partial" else R + "✗" + RESET
         last_sync = src.get("last_sync", "never")
         if last_sync != "never":
-            # Make timestamp more readable
             try:
                 from datetime import datetime
                 dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
@@ -181,7 +190,7 @@ def cmd_report(args):
 
         print(f"\n  {icon} {name} ({status})")
         if count > 0:
-            for f in findings[:5]:  # Show top 5
+            for f in findings[:5]:
                 desc = f.get("description", f.get("message", "No description"))
                 sev = f.get("severity", "unknown")
                 sev_color = R if sev in ("critical", "high") else Y if sev == "medium" else ""
@@ -197,7 +206,7 @@ def cmd_report(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="clawsec",
-        description="ClawSec v2 — Security Verification for ClawHub Skills",
+        description="⚡ ClawSec v2 — Security Verification for ClawHub Skills",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   clawsec scan ./my-skill          Verify a local skill

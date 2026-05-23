@@ -1,13 +1,14 @@
 /**
- * ClawSec v2 - API Middleware
+ * ⚡ ClawSec v2 - API Middleware
  * Rate limiting, auth, request logging
  */
 
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 
-const CLAWSEC_DIR = path.join(process.env.HOME || '/home/openclaw', 'clawsec-v2');
+const CLAWSEC_DIR = process.env.CLAWSEC_HOME || path.join(os.homedir(), '.clawsec');
 
 // Rate limiter: 5 scans/day for free tier, much higher for API key holders
 const freeLimiter = new RateLimiterMemory({
@@ -37,7 +38,7 @@ function loadApiKeys() {
 
 // Rate limiter middleware
 const rateLimiter = async (req, res, next) => {
-    const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+    const apiKey = req.headers['x-api-key'] || (req.headers['authorization'] || '').replace('Bearer ', '');
     const keys = loadApiKeys();
 
     if (apiKey && keys[apiKey]) {
@@ -73,7 +74,7 @@ const rateLimiter = async (req, res, next) => {
 
 // API key auth (optional - works without, just gets free tier)
 const apiKeyAuth = (req, res, next) => {
-    const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+    const apiKey = req.headers['x-api-key'] || (req.headers['authorization'] || '').replace('Bearer ', '');
     if (apiKey) {
         const keys = loadApiKeys();
         if (keys[apiKey]) {
@@ -91,7 +92,7 @@ const requestLogger = (req, res, next) => {
     res.on('finish', () => {
         const duration = Date.now() - start;
         const tier = req.userTier || 'free';
-        console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} ${res.statusCode} ${duration}ms [${tier}]`);
+        console.log('[' + new Date().toISOString() + '] ' + req.method + ' ' + req.path + ' ' + res.statusCode + ' ' + duration + 'ms [' + tier + ']');
     });
     next();
 };

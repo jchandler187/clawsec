@@ -1,18 +1,19 @@
 /**
- * ClawSec v2 - Cloud API Server
+ * ⚡ ClawSec v2 - Cloud API Server
  * Express-based security verification service
  */
 
 const express = require('express');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 const routes = require('./routes');
 const middleware = require('./middleware');
 
-const CLAWSEC_DIR = path.join(process.env.HOME || '/home/openclaw', 'clawsec-v2');
-const REPORTS_DIR = path.join(CLAWSEC_DIR, 'reports');
+const CLAWSEC_DIR = process.env.CLAWSEC_HOME || path.join(os.homedir(), '.clawsec');
+const REPORTS_DIR = process.env.CLAWSEC_REPORTS_DIR || path.join(CLAWSEC_DIR, 'reports');
 const PORT = process.env.CLAWSEC_PORT || 3100;
 
 const app = express();
@@ -43,7 +44,7 @@ app.get('/health', (req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-    console.error(`[ERROR] ${err.message}`);
+    console.error("[ERROR] " + err.message);
     res.status(err.status || 500).json({
         error: err.message || 'Internal server error',
         status: err.status || 500
@@ -51,7 +52,7 @@ app.use((err, req, res, next) => {
 });
 
 // Start
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`ClawSec API v2.0.0 listening on 127.0.0.1:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log("⚡ ClawSec API v2.0.0 listening on 0.0.0.0:" + PORT);
     fs.mkdirSync(REPORTS_DIR, { recursive: true });
 });
