@@ -10,7 +10,7 @@
 #
 set -euo pipefail
 
-VERSION="2.3.1"
+VERSION="2.3.3"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHECKS_DIR="${SCRIPT_DIR}/checks"
 
