@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClawSec postinstall — sets up Python venv
+ * ⚡ ClawSec postinstall — sets up Python venv and runs initial intel sync
  * Called by npm postinstall. Safe to run multiple times.
  */
 
@@ -12,23 +12,63 @@ const os = require('os');
 const CLAWSEC_HOME = process.env.CLAWSEC_HOME || path.join(os.homedir(), '.clawsec');
 const VENV_DIR = path.join(CLAWSEC_HOME, 'venv');
 const PYTHON = path.join(VENV_DIR, 'bin', 'python3');
+const INTEL_DIR = path.join(CLAWSEC_HOME, 'intel');
 
 // Don't fail install if setup fails — user can run clawsec setup later
 try {
-  if (fs.existsSync(PYTHON)) {
-    process.exit(0); // Already set up
+  // Step 1: Create Python venv if needed
+  if (!fs.existsSync(PYTHON)) {
+    fs.mkdirSync(CLAWSEC_HOME, { recursive: true });
+    console.log('⚡ Setting up ClawSec Python environment (first run)...');
+    execSync(`python3 -m venv "${VENV_DIR}"`, { stdio: 'inherit' });
+
+    const PKG_ROOT = path.resolve(__dirname, '..');
+    const REQUIREMENTS = path.join(PKG_ROOT, 'requirements.txt');
+
+    if (fs.existsSync(REQUIREMENTS)) {
+      execSync(`"${PYTHON}" -m pip install --quiet --upgrade pip`, { stdio: 'pipe' });
+      execSync(`"${PYTHON}" -m pip install --quiet -r "${REQUIREMENTS}"`, { stdio: 'pipe' });
+    }
+    console.log('  ✅ Python environment ready.');
   }
 
-  fs.mkdirSync(CLAWSEC_HOME, { recursive: true });
-  execSync(`python3 -m venv "${VENV_DIR}"`, { stdio: 'pipe' });
-
-  const PKG_ROOT = path.resolve(__dirname, '..');
-  const REQUIREMENTS = path.join(PKG_ROOT, 'requirements.txt');
-
-  if (fs.existsSync(REQUIREMENTS)) {
-    execSync(`"${PYTHON}" -m pip install --quiet --upgrade pip`, { stdio: 'pipe' });
-    execSync(`"${PYTHON}" -m pip install --quiet -r "${REQUIREMENTS}"`, { stdio: 'pipe' });
+  // Step 2: Create intel directories and sync
+  const intelDirs = [
+    'cisa-kev', 'osv', 'osv/npm', 'osv/PyPI', 'epss',
+    'malwarebazaar', 'urlhaus', 'threatfox', 'feodo',
+    'yara-rules', 'yara-rules/repo', 'semgrep-rules', 'semgrep-rules/repo'
+  ];
+  for (const d of intelDirs) {
+    fs.mkdirSync(path.join(INTEL_DIR, d), { recursive: true });
   }
+  fs.mkdirSync(path.join(CLAWSEC_HOME, 'reports'), { recursive: true });
+
+  // Only sync if intel cache is empty (first install)
+  const manifest = path.join(INTEL_DIR, 'manifest.json');
+  if (!fs.existsSync(manifest)) {
+    console.log('⚡ Downloading threat intel (first run, may take a few minutes)...');
+    const PKG_ROOT = path.resolve(__dirname, '..');
+    const syncSh = path.join(PKG_ROOT, 'lib', 'intel-sync', 'sync.sh');
+    if (fs.existsSync(syncSh)) {
+      try {
+        execSync(`bash "${syncSh}"`, {
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            CLAWSEC_HOME: CLAWSEC_HOME,
+            CLAWSEC_INTEL_DIR: INTEL_DIR,
+            CLAWSEC_REPORTS_DIR: path.join(CLAWSEC_HOME, 'reports'),
+            PATH: `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
+          }
+        });
+      } catch {
+        // Sync failure is non-fatal — user can run clawsec sync later
+        console.log('  ⚠ Intel sync had issues. Run "clawsec sync" to retry.');
+      }
+    }
+  }
+
+  console.log('⚡ ClawSec ready. Run "clawsec scan ./my-skill" to get started.');
 } catch {
   // Postinstall is best-effort. The CLI will try again on first run.
   process.exit(0);
