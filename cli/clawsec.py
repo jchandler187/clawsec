@@ -14,12 +14,14 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 CLAWSEC_DIR = os.environ.get("CLAWSEC_HOME", os.path.expanduser("~/.clawsec"))
 INTEL_DIR = os.environ.get("CLAWSEC_INTEL_DIR", os.path.join(CLAWSEC_DIR, "intel"))
 REPORTS_DIR = os.environ.get("CLAWSEC_REPORTS_DIR", os.path.join(CLAWSEC_DIR, "reports"))
@@ -46,29 +48,70 @@ def banner():
   ╚═════════════════════════════════════════╝{RESET}
 """)
 
+def is_slug(target):
+    """Check if target looks like a ClawHub slug (no path separators, no dots, not a local path)."""
+    if os.path.exists(target):
+        return False
+    if "/" in target or target.startswith("."):
+        return False
+    # Slugs are alphanumeric with hyphens, no extensions
+    if target.startswith("-") or target.endswith("-"):
+        return False
+    return True
+
+def download_slug(slug):
+    """Download a skill from ClawHub by slug. Returns the path or None."""
+    tmpdir = tempfile.mkdtemp(prefix="clawsec-scan-")
+    try:
+        result = subprocess.run(
+            ["clawhub", "install", slug, "--dir", tmpdir],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            print(f"{R}Error:{RESET} Failed to install '{slug}' from ClawHub", file=sys.stderr)
+            if result.stderr:
+                print(f"  {DIM}{result.stderr.strip()}{RESET}", file=sys.stderr)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return None
+        # Find the installed skill directory
+        entries = list(Path(tmpdir).iterdir())
+        if not entries:
+            print(f"{R}Error:{RESET} ClawHub install produced no output for '{slug}'", file=sys.stderr)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return None
+        # If only one directory, use it directly
+        if len(entries) == 1 and entries[0].is_dir():
+            return str(entries[0]), tmpdir
+        # Multiple entries — use the tmpdir itself
+        return tmpdir, tmpdir
+    except FileNotFoundError:
+        print(f"{R}Error:{RESET} 'clawhub' CLI not found. Install it with: npm install -g @anthropic/clawhub", file=sys.stderr)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
+    except subprocess.TimeoutExpired:
+        print(f"{R}Error:{RESET} ClawHub install timed out for '{slug}'", file=sys.stderr)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None
+
 def cmd_scan(args):
-    """Run verification against a skill path."""
+    """Run verification against a skill path or ClawHub slug."""
     target = args.target
     json_mode = args.json
+    cleanup_dir = None
 
-    # If it's a slug (no path separator and doesn't exist locally),
-    # try to download from ClawHub
-    if not os.path.exists(target) and "/" not in target and not target.startswith("."):
-        try:
-            result = subprocess.run(
-                ["clawhub", "install", target, "--dir", "/tmp/clawsec-scan-temp"],
-                capture_output=True, text=True, timeout=60
-            )
-            if result.returncode == 0:
-                for d in Path("/tmp/clawsec-scan-temp").iterdir():
-                    if d.is_dir():
-                        target = str(d)
-                        break
-        except Exception:
-            pass
+    # If it looks like a slug, try to download from ClawHub
+    if is_slug(target):
+        if not json_mode:
+            print(f"  {C}⚡ Downloading '{target}' from ClawHub...{RESET}")
+        result = download_slug(target)
+        if result is None:
+            sys.exit(2)
+        target, cleanup_dir = result
+        if not json_mode:
+            print(f"  {G}✓{RESET} Downloaded to {target}")
 
     if not os.path.exists(target):
-        print(f"{R}Error:{RESET} {target} not found", file=sys.stderr)
+        print(f"{R}Error:{RESET} '{args.target}' not found (not a local path and not a valid ClawHub slug)", file=sys.stderr)
         sys.exit(2)
 
     # Run verify.sh — resolve relative to package root
@@ -87,6 +130,11 @@ def cmd_scan(args):
     result = subprocess.run(cmd, capture_output=json_mode, text=True)
     if json_mode:
         print(result.stdout)
+
+    # Clean up downloaded skill
+    if cleanup_dir:
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+
     sys.exit(result.returncode)
 
 def cmd_sync(args):
@@ -96,6 +144,7 @@ def cmd_sync(args):
     for d in intel_dirs:
         os.makedirs(os.path.join(INTEL_DIR, d), exist_ok=True)
     os.makedirs(REPORTS_DIR, exist_ok=True)
+
     sync_sh = os.path.join(PKG_ROOT, "lib", "intel-sync", "sync.sh")
     if not os.path.exists(sync_sh):
         sync_sh = os.path.join(CLAWSEC_DIR, "lib", "intel-sync", "sync.sh")
@@ -214,7 +263,8 @@ def main():
         description="⚡ ClawSec v2 — Security Verification for ClawHub Skills",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
-  clawsec scan ./my-skill          Verify a local skill
+  clawsec scan ./my-skill          Verify a local skill directory
+  clawsec scan weather-forecast     Download and scan from ClawHub
   clawsec scan ./my-skill --json   Machine-readable output
   clawsec sync                     Refresh all intel sources
   clawsec sync cisa-kev epss       Sync specific sources
@@ -226,8 +276,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # scan
-    scan_parser = subparsers.add_parser("scan", help="Verify a skill")
-    scan_parser.add_argument("target", help="Skill path or ClawHub slug")
+    scan_parser = subparsers.add_parser("scan", help="Verify a skill (local path or ClawHub slug)")
+    scan_parser.add_argument("target", help="Skill path or ClawHub slug (e.g. 'weather-forecast')")
     scan_parser.add_argument("--checks", help="Comma-separated list of checks to run")
     scan_parser.add_argument("--json", action="store_true", help="JSON output")
 
