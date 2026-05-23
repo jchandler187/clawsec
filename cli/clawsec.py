@@ -15,13 +15,14 @@ import argparse
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 CLAWSEC_DIR = os.environ.get("CLAWSEC_HOME", os.path.expanduser("~/.clawsec"))
 INTEL_DIR = os.environ.get("CLAWSEC_INTEL_DIR", os.path.join(CLAWSEC_DIR, "intel"))
 REPORTS_DIR = os.environ.get("CLAWSEC_REPORTS_DIR", os.path.join(CLAWSEC_DIR, "reports"))
@@ -40,6 +41,7 @@ BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
+
 def banner():
     print(f"""{BOLD}
   ╔═════════════════════════════════════════╗
@@ -47,6 +49,7 @@ def banner():
   ║   ⚡ Security Verification for ClawHub  ║
   ╚═════════════════════════════════════════╝{RESET}
 """)
+
 
 def is_slug(target):
     """Check if target looks like a ClawHub slug (no path separators, no dots, not a local path)."""
@@ -59,13 +62,45 @@ def is_slug(target):
         return False
     return True
 
+
+def harden_skill_dir(skill_dir):
+    """
+    Remove execute permissions from all files in the skill directory.
+    This prevents any scripts from being executed accidentally before or during scanning.
+    We only need to READ these files, never execute them.
+    """
+    for root, dirs, files in os.walk(skill_dir):
+        for f in files:
+            fpath = os.path.join(root, f)
+            try:
+                current_mode = os.stat(fpath).st_mode
+                # Remove all execute bits (user, group, other)
+                os.chmod(fpath, current_mode & ~(stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+            except OSError:
+                pass
+
+
 def download_slug(slug):
-    """Download a skill from ClawHub by slug. Returns the path or None."""
+    """
+    Download a skill from ClawHub by slug.
+    
+    Security measures:
+    - Downloads to a restricted temp directory (0700 permissions)
+    - Strips execute permissions from all downloaded files before returning
+    - Uses --no-input flag to prevent any interactive prompts
+    - Does NOT run any postinstall scripts from the downloaded skill
+    
+    Returns (skill_path, cleanup_dir) or None on failure.
+    """
+    # Create temp dir with restricted permissions (owner only)
     tmpdir = tempfile.mkdtemp(prefix="clawsec-scan-")
+    os.chmod(tmpdir, stat.S_IRWXU)  # 0700 — owner read/write/exec only
+
     try:
         result = subprocess.run(
-            ["clawhub", "install", slug, "--dir", tmpdir],
-            capture_output=True, text=True, timeout=120
+            ["clawhub", "install", slug, "--dir", tmpdir, "--no-input"],
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "npm_config_ignore_scripts": "true"}  # Never run skill's postinstall
         )
         if result.returncode != 0:
             print(f"{R}Error:{RESET} Failed to install '{slug}' from ClawHub", file=sys.stderr)
@@ -73,17 +108,26 @@ def download_slug(slug):
                 print(f"  {DIM}{result.stderr.strip()}{RESET}", file=sys.stderr)
             shutil.rmtree(tmpdir, ignore_errors=True)
             return None
+
         # Find the installed skill directory
         entries = list(Path(tmpdir).iterdir())
         if not entries:
             print(f"{R}Error:{RESET} ClawHub install produced no output for '{slug}'", file=sys.stderr)
             shutil.rmtree(tmpdir, ignore_errors=True)
             return None
-        # If only one directory, use it directly
+
+        # Determine skill path
         if len(entries) == 1 and entries[0].is_dir():
-            return str(entries[0]), tmpdir
-        # Multiple entries — use the tmpdir itself
-        return tmpdir, tmpdir
+            skill_path = str(entries[0])
+        else:
+            skill_path = tmpdir
+
+        # SECURITY: Strip execute permissions from ALL downloaded files.
+        # We only need to read them for scanning — never execute them.
+        harden_skill_dir(skill_path)
+
+        return skill_path, tmpdir
+
     except FileNotFoundError:
         print(f"{R}Error:{RESET} 'clawhub' CLI not found. Install it with: npm install -g @anthropic/clawhub", file=sys.stderr)
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -92,6 +136,7 @@ def download_slug(slug):
         print(f"{R}Error:{RESET} ClawHub install timed out for '{slug}'", file=sys.stderr)
         shutil.rmtree(tmpdir, ignore_errors=True)
         return None
+
 
 def cmd_scan(args):
     """Run verification against a skill path or ClawHub slug."""
@@ -137,6 +182,7 @@ def cmd_scan(args):
 
     sys.exit(result.returncode)
 
+
 def cmd_sync(args):
     """Run intel sync."""
     # Ensure intel directories exist
@@ -155,6 +201,7 @@ def cmd_sync(args):
     cmd.extend(args.sources)
     result = subprocess.run(cmd, text=True)
     sys.exit(result.returncode)
+
 
 def cmd_status(args):
     """Show cache status."""
@@ -201,6 +248,7 @@ def cmd_status(args):
     except Exception:
         pass
     print(f"  Last full sync: {updated}")
+
 
 def cmd_report(args):
     """View a saved report."""
@@ -256,6 +304,7 @@ def cmd_report(args):
                 print(f"    {DIM}err: {e}{RESET}")
 
     print()
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -313,6 +362,7 @@ def main():
     else:
         parser.print_help()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
