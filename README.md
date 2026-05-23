@@ -2,7 +2,7 @@
 
 Security verification tool that scans ClawHub skills against 10 continuously-updated threat intelligence sources using 7 autonomous security checks.
 
-If you find it useful, [buy me a coffee](https://buymeacoffee.com/jchandler187) ⚡
+If you find it useful, [buy me a coffee](https://buymeacoffee.com/lowwattlabs) ⚡
 
 ## Quick Start
 
