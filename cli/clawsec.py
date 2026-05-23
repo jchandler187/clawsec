@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 CLAWSEC_DIR = os.environ.get("CLAWSEC_HOME", os.path.expanduser("~/.clawsec"))
 INTEL_DIR = os.environ.get("CLAWSEC_INTEL_DIR", os.path.join(CLAWSEC_DIR, "intel"))
 REPORTS_DIR = os.environ.get("CLAWSEC_REPORTS_DIR", os.path.join(CLAWSEC_DIR, "reports"))

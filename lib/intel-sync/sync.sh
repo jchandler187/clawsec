@@ -31,12 +31,12 @@ usage() {
 ALL_SOURCES=(cisa-kev osv epss malwarebazaar urlhaus threatfox feodo yara-rules semgrep-rules)
 
 # Ensure intel directories exist
-INTEL_DIR=
-for src in ; do
-    mkdir -p /
+INTEL_DIR="${CLAWSEC_INTEL_DIR}"
+for src in "${ALL_SOURCES[@]}"; do
+    mkdir -p "${INTEL_DIR}/${src}"
 done
-mkdir -p /osv/npm /osv/PyPI
-mkdir -p 
+mkdir -p "${INTEL_DIR}/osv/npm" "${INTEL_DIR}/osv/PyPI"
+mkdir -p "${CLAWSEC_REPORTS_DIR}" 
 requested_sources=()
 json_output=0
 
